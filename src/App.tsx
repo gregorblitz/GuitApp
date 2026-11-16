@@ -9,10 +9,14 @@ import { ChordPresets } from './components/ChordPresets';
 import type {
   IntervalDegree,
   StringConfig,
+  TuningId,
 } from './types/music';
 import {
+  CHROMATIC_NOTES,
   INITIAL_PALETTE_COLORS,
   INITIAL_STRINGS_CONFIG,
+  TUNING_CONFIGS,
+  createStringsConfigForTuning,
   mapActiveIntervalsToColors,
   getSlotAssignments,
   findVoicingNotes,
@@ -38,10 +42,13 @@ export function App() {
   // 4. Color palette (8 slots)
   const [paletteColors, setPaletteColors] = useState<string[]>(INITIAL_PALETTE_COLORS);
 
-  // 5. 6-String control configuration
+  // 5. Tuning selector (E Estándar, Eb Estándar, D Estándar) - Fase 4
+  const [selectedTuning, setSelectedTuning] = useState<TuningId>('standard_e');
+
+  // 6. 6-String control configuration
   const [stringsConfig, setStringsConfig] = useState<StringConfig[]>(INITIAL_STRINGS_CONFIG);
 
-  // 6. Audio state
+  // 7. Audio state
   const [isAudioReady, setIsAudioReady] = useState<boolean>(false);
   const [bpm, setBpm] = useState<number>(115);
   const [isArpeggiating, setIsArpeggiating] = useState<boolean>(false);
@@ -49,6 +56,15 @@ export function App() {
 
   // Avoid auto-strum on initial mount before user gesture
   const isFirstMount = useRef(true);
+
+  // When tuning changes, update stringsConfig while preserving user's notesEnabled and stringVisible states
+  const handleChangeTuning = useCallback((newTuningId: TuningId) => {
+    setSelectedTuning(newTuningId);
+    const newTuning = TUNING_CONFIGS[newTuningId];
+    setStringsConfig((prev) => createStringsConfigForTuning(newTuning, prev));
+  }, []);
+
+  const isFlatTuning = selectedTuning === 'standard_eb';
 
   // --- COMPUTED DERIVED STATE ---
   // Color mapping: interval -> hex color
@@ -70,7 +86,12 @@ export function App() {
       if (!str.stringVisible || !str.notesEnabled) return;
 
       for (let fret = 0; fret <= 15; fret++) {
-        const { degree, octaveNote } = calculateInterval(str.openMidi, fret, rootIndex);
+        const { degree, octaveNote } = calculateInterval(
+          str.openMidi,
+          fret,
+          rootIndex,
+          isFlatTuning
+        );
         if (activeSet.has(degree)) {
           list.push({
             id: `${str.index}-${fret}`,
@@ -85,7 +106,7 @@ export function App() {
     });
 
     return list;
-  }, [stringsConfig, activeIntervals, rootIndex]);
+  }, [stringsConfig, activeIntervals, rootIndex, isFlatTuning]);
 
   // Voicing notes for chord strumming across active strings
   const voicingNotes = useMemo(() => {
@@ -106,7 +127,7 @@ export function App() {
     }
   }, [activateAudio, voicingNotes]);
 
-  // Play single note on fret click
+  // Play single note on fret click (respects exact tuning frequency)
   const handleFretboardNoteClick = useCallback(
     async (note: { id: string; octaveNote: string }) => {
       await activateAudio();
@@ -115,7 +136,7 @@ export function App() {
     [activateAudio]
   );
 
-  // Auto-strum when Root note or intervals change (after initial mount)
+  // Auto-strum when Root note, intervals, or tuning changes (after initial mount)
   useEffect(() => {
     if (isFirstMount.current) {
       isFirstMount.current = false;
@@ -125,7 +146,7 @@ export function App() {
     if (voicingNotes.length > 0) {
       audioEngine.playStrum(voicingNotes, 0.035);
     }
-  }, [rootIndex, activeIntervals, voicingNotes]);
+  }, [rootIndex, activeIntervals, selectedTuning, voicingNotes]);
 
   // Sync BPM with Tone.Transport
   useEffect(() => {
@@ -234,19 +255,23 @@ export function App() {
   return (
     <div className="min-h-screen bg-[#242426] text-gray-100 flex flex-col p-3 md:p-6 font-sans">
       <div className="max-w-[1550px] w-full mx-auto flex flex-col gap-4">
-        {/* Header with Title and Current Chord */}
+        {/* Header with Title, Chord, Tuning Selector & Audio Ready */}
         <Header
           rootIndex={rootIndex}
           activeIntervals={activeIntervals}
+          selectedTuning={selectedTuning}
+          onChangeTuning={handleChangeTuning}
           isAudioReady={isAudioReady}
           onActivateAudio={activateAudio}
         />
 
-        {/* Quick Chord Preset helpers */}
+        {/* Quick Chord Presets & Guided Explorer (Fase 4) */}
         <ChordPresets
           onSelectPreset={handleSelectPreset}
           activeIntervals={activeIntervals}
           onClearAll={handleClearAll}
+          intervalColors={intervalColors}
+          rootNoteName={CHROMATIC_NOTES[rootIndex]}
         />
 
         {/* 1. PANEL SUPERIOR (Grid de 2 columnas) */}
@@ -312,6 +337,8 @@ export function App() {
             intervalColors={intervalColors}
             fretWidth={fretWidth}
             highlightedNoteId={highlightedNoteId}
+            tuningBadgeText={TUNING_CONFIGS[selectedTuning].badgeText}
+            useFlats={isFlatTuning}
             onNoteClick={handleFretboardNoteClick}
           />
         </div>
@@ -320,7 +347,9 @@ export function App() {
         <footer className="text-center py-2 text-xs text-gray-500 flex flex-wrap items-center justify-center gap-4 border-t border-[#34343a] mt-2">
           <span>Inversiones de Acordes en Guitarra</span>
           <span>•</span>
-          <span>Afinación Estándar E2-A2-D3-G3-B3-E4 (40, 45, 50, 55, 59, 64)</span>
+          <span>
+            {TUNING_CONFIGS[selectedTuning].label}: {TUNING_CONFIGS[selectedTuning].subtitle}
+          </span>
           <span>•</span>
           <span>Síntesis Tone.PolySynth con filtro 2600Hz, chorus & reverb</span>
         </footer>

@@ -50,7 +50,7 @@ export interface FretboardNote {
 export interface StringConfig {
   index: number; // 0 to 5
   stringNumber: number; // 1 to 6
-  name: string; // e.g. "1ª (E4)"
+  name: string; // e.g. "1ª Cuerda (E4)"
   openMidi: number;
   openNote: string;
   notesEnabled: boolean; // Column 1: activates/deactivates notes of this string
@@ -62,4 +62,31 @@ export interface ColorSlot {
   color: string;
   hex: string;
   assignedDegree?: IntervalDegree;
+}
+
+export type TuningId = 'standard_e' | 'standard_eb' | 'standard_d';
+
+export interface TuningConfig {
+  id: TuningId;
+  label: string; // exact dropdown text: "E Estándar (Por defecto)", etc.
+  name: string;
+  subtitle: string; // notes description: "E, A, D, G, B, E"
+  badgeText: string; // text for fretboard header
+  // Strings from 1st (high) to 6th (low):
+  stringsMidi: [number, number, number, number, number, number];
+  openNotes: [string, string, string, string, string, string];
+}
+
+export type ExplorerCategory =
+  | 'Acordes con Color'
+  | 'Escalas para Solos'
+  | 'Modos Cinematográficos';
+
+export interface ExplorerPreset {
+  id: string;
+  name: string;
+  category: ExplorerCategory;
+  semitones: number[];
+  degrees: IntervalDegree[];
+  description: string;
 }

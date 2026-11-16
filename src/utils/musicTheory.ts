@@ -1,5 +1,13 @@
 import * as Tone from 'tone';
-import type { IntervalDegree, IntervalInfo, NoteName, StringConfig } from '../types/music';
+import type {
+  IntervalDegree,
+  IntervalInfo,
+  NoteName,
+  StringConfig,
+  TuningConfig,
+  TuningId,
+  ExplorerPreset,
+} from '../types/music';
 
 export const CHROMATIC_NOTES: NoteName[] = [
   'C',
@@ -16,9 +24,55 @@ export const CHROMATIC_NOTES: NoteName[] = [
   'B',
 ];
 
-// Standard guitar tuning in MIDI (Strings 1 to 6 from highest to lowest):
-// 1st: E4 (64), 2nd: B3 (59), 3rd: G3 (55), 4th: D3 (50), 5th: A2 (45), 6th: E2 (40)
-export const STANDARD_TUNING_MIDI = [64, 59, 55, 50, 45, 40] as const;
+// Flat representation dictionary for clean display
+export const ENHARMONIC_FLATS: Record<number, string> = {
+  0: 'C',
+  1: 'Db',
+  2: 'D',
+  3: 'Eb',
+  4: 'E',
+  5: 'F',
+  6: 'Gb',
+  7: 'G',
+  8: 'Ab',
+  9: 'A',
+  10: 'Bb',
+  11: 'B',
+};
+
+// 1. SELECTOR DE AFINACIONES (Fase 4)
+export const TUNING_CONFIGS: Record<TuningId, TuningConfig> = {
+  standard_e: {
+    id: 'standard_e',
+    label: 'E Estándar (Por defecto)',
+    name: 'E Estándar',
+    subtitle: 'E, A, D, G, B, E',
+    badgeText: 'Afinación: E Estándar (EADGBE)',
+    // 1ª a 6ª cuerda (de aguda a grave):
+    stringsMidi: [64, 59, 55, 50, 45, 40],
+    openNotes: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'],
+  },
+  standard_eb: {
+    id: 'standard_eb',
+    label: 'Eb Estándar (½ tono abajo)',
+    name: 'Eb Estándar',
+    subtitle: 'Eb, Ab, Db, Gb, Bb, Eb',
+    badgeText: 'Afinación: Eb Estándar (Eb Ab Db Gb Bb Eb)',
+    // 1ª a 6ª cuerda (de aguda a grave):
+    stringsMidi: [63, 58, 54, 49, 44, 39],
+    openNotes: ['Eb4', 'Bb3', 'Gb3', 'Db3', 'Ab2', 'Eb2'],
+  },
+  standard_d: {
+    id: 'standard_d',
+    label: 'D Estándar (1 tono abajo)',
+    name: 'D Estándar',
+    subtitle: 'D, G, C, F, A, D',
+    badgeText: 'Afinación: D Estándar (DGCFAD)',
+    // 1ª a 6ª cuerda (de aguda a grave):
+    stringsMidi: [62, 57, 53, 48, 43, 38],
+    openNotes: ['D4', 'A3', 'F3', 'C3', 'G2', 'D2'],
+  },
+};
 
 export const INITIAL_STRINGS_CONFIG: StringConfig[] = [
   { index: 0, stringNumber: 1, name: '1ª Cuerda (E4)', openMidi: 64, openNote: 'E4', notesEnabled: true, stringVisible: true },
@@ -28,6 +82,31 @@ export const INITIAL_STRINGS_CONFIG: StringConfig[] = [
   { index: 4, stringNumber: 5, name: '5ª Cuerda (A2)', openMidi: 45, openNote: 'A2', notesEnabled: true, stringVisible: true },
   { index: 5, stringNumber: 6, name: '6ª Cuerda (E2)', openMidi: 40, openNote: 'E2', notesEnabled: true, stringVisible: true },
 ];
+
+/**
+ * Creates/Updates the 6-string config preserving user toggles (notesEnabled & stringVisible)
+ */
+export function createStringsConfigForTuning(
+  tuning: TuningConfig,
+  existingConfigs?: StringConfig[]
+): StringConfig[] {
+  return [0, 1, 2, 3, 4, 5].map((i) => {
+    const stringNum = i + 1;
+    const openMidi = tuning.stringsMidi[i];
+    const openNote = tuning.openNotes[i];
+    const existing = existingConfigs?.[i];
+
+    return {
+      index: i,
+      stringNumber: stringNum,
+      name: `${stringNum}ª Cuerda (${openNote})`,
+      openMidi,
+      openNote,
+      notesEnabled: existing ? existing.notesEnabled : true,
+      stringVisible: existing ? existing.stringVisible : true,
+    };
+  });
+}
 
 export const INTERVAL_DEFINITIONS: IntervalInfo[] = [
   { semitones: 0, degree: 'R', label: 'R', isBlack: false, nameEs: 'Tónica / Raíz' },
@@ -74,6 +153,111 @@ export const SEMITONE_BY_DEGREE: Record<IntervalDegree, number> = {
   '7': 11,
 };
 
+// 2. EXPLORADOR DE ACORDES, ESCALAS Y MODOS (Fase 4)
+export const EXPLORER_PRESETS: ExplorerPreset[] = [
+  // Acordes con Color
+  {
+    id: 'triad_major',
+    name: 'Triada Mayor',
+    category: 'Acordes con Color',
+    semitones: [0, 4, 7],
+    degrees: ['R', '3', '5'],
+    description: 'Sonido alegre, brillante y estable. Ideal para bases sólidas y melodías luminosas.',
+  },
+  {
+    id: 'triad_minor',
+    name: 'Triada Menor',
+    category: 'Acordes con Color',
+    semitones: [0, 3, 7],
+    degrees: ['R', 'b3', '5'],
+    description: 'Sonido nostálgico, serio o emotivo. Base del rock, pop y baladas.',
+  },
+  {
+    id: 'maj7',
+    name: 'Maj7 (Séptima Mayor)',
+    category: 'Acordes con Color',
+    semitones: [0, 4, 7, 11],
+    degrees: ['R', '3', '5', '7'],
+    description: 'Atmósfera elegante, soñadora y relajada (Neo-Soul, Jazz, Lo-Fi).',
+  },
+  {
+    id: 'm7',
+    name: 'Menor 7 (m7)',
+    category: 'Acordes con Color',
+    semitones: [0, 3, 7, 10],
+    degrees: ['R', 'b3', '5', 'b7'],
+    description: 'Sonido suave, profundo y con groove (Funk, R&B, Blues menor).',
+  },
+  {
+    id: 'dom7',
+    name: 'Dominante 7',
+    category: 'Acordes con Color',
+    semitones: [0, 4, 7, 10],
+    degrees: ['R', '3', '5', 'b7'],
+    description: 'Crea tensión eléctrica y bluesera que pide movimiento.',
+  },
+  {
+    id: 'sus2',
+    name: 'Sus2 (Suspendido)',
+    category: 'Acordes con Color',
+    semitones: [0, 2, 7],
+    degrees: ['R', '2', '5'],
+    description: 'Sonido abierto, moderno y flotante sin definir si es mayor o menor.',
+  },
+
+  // Escalas para Solos
+  {
+    id: 'pentatonic_minor',
+    name: 'Pentatónica Menor',
+    category: 'Escalas para Solos',
+    semitones: [0, 3, 5, 7, 10],
+    degrees: ['R', 'b3', '4', '5', 'b7'],
+    description: 'El mapa más seguro para improvisar solos de rock y blues sin notas falsas.',
+  },
+  {
+    id: 'pentatonic_major',
+    name: 'Pentatónica Mayor',
+    category: 'Escalas para Solos',
+    semitones: [0, 2, 4, 7, 9],
+    degrees: ['R', '2', '3', '5', '6'],
+    description: 'Ideal para melodías cantables, pop, country y frases expresivas.',
+  },
+  {
+    id: 'blues_scale',
+    name: 'Escala Blues',
+    category: 'Escalas para Solos',
+    semitones: [0, 3, 5, 6, 7, 10],
+    degrees: ['R', 'b3', '4', 'b5', '5', 'b7'],
+    description: 'Añade la "nota blue" (b5) para darle expresión cruda y carácter.',
+  },
+
+  // Modos Cinematográficos
+  {
+    id: 'lydian_mode',
+    name: 'Modo Lidio (Épico / Espacial)',
+    category: 'Modos Cinematográficos',
+    semitones: [0, 2, 4, 6, 7, 9, 11],
+    degrees: ['R', '2', '3', 'b5', '5', '6', '7'],
+    description: 'Sonido mágico y de película; enfatiza el intervalo #11 para crear tensión luminosa.',
+  },
+  {
+    id: 'dorian_mode',
+    name: 'Modo Dórico (Misterioso / Groove)',
+    category: 'Modos Cinematográficos',
+    semitones: [0, 2, 3, 5, 7, 9, 10],
+    degrees: ['R', '2', 'b3', '4', '5', '6', 'b7'],
+    description: 'Menor pero con un toque elegante y místico (estilo Santana o Pink Floyd).',
+  },
+  {
+    id: 'phrygian_mode',
+    name: 'Modo Frigio (Oscuro / Metal-Flamenco)',
+    category: 'Modos Cinematográficos',
+    semitones: [0, 1, 3, 5, 7, 8, 10],
+    degrees: ['R', 'b2', 'b3', '4', '5', 'b6', 'b7'],
+    description: 'Sonido exótico, tenso y agresivo gracias al salto de medio tono inicial (b2).',
+  },
+];
+
 export const INITIAL_PALETTE_COLORS = [
   '#ff4fa2',
   '#64c8ff',
@@ -91,7 +275,6 @@ export function mapActiveIntervalsToColors(
 ): Record<IntervalDegree, string> {
   const result: Partial<Record<IntervalDegree, string>> = {};
   const activeSet = new Set(activeDegrees);
-
   const slotOccupied: boolean[] = new Array(paletteColors.length).fill(false);
 
   if (activeSet.has('R') && paletteColors[0]) {
@@ -156,21 +339,31 @@ export function getSlotAssignments(
   return slots;
 }
 
+/**
+ * Calculates interval and note names for a given string and fret.
+ * Uses exact MIDI frequency to guarantee correct octave and audio pitch.
+ */
 export function calculateInterval(
   stringMidi: number,
   fret: number,
-  rootIndex: number
+  rootIndex: number,
+  useFlats = false
 ): {
   semitonesFromRoot: number;
   degree: IntervalDegree;
-  noteName: NoteName;
+  noteName: NoteName | string;
   octaveNote: string;
 } {
   const noteMidi = stringMidi + fret;
   const semitonesFromRoot = ((noteMidi - rootIndex) % 12 + 12) % 12;
   const degree = DEGREE_BY_SEMITONE[semitonesFromRoot];
-  const noteName = CHROMATIC_NOTES[noteMidi % 12];
-  const octaveNote = Tone.Frequency(noteMidi, 'midi').toNote();
+  
+  // Note pitch representation with correct octave:
+  const toneNote = Tone.Frequency(noteMidi, 'midi').toNote();
+  const octave = Math.floor(noteMidi / 12) - 1;
+  const pitchIndex = noteMidi % 12;
+  const noteName = useFlats ? ENHARMONIC_FLATS[pitchIndex] : CHROMATIC_NOTES[pitchIndex];
+  const octaveNote = useFlats ? `${noteName}${octave}` : toneNote;
 
   return {
     semitonesFromRoot,

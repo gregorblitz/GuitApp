@@ -9,12 +9,15 @@ interface FretboardProps {
   intervalColors: Record<IntervalDegree, string>;
   fretWidth: number; // 50 to 110 px
   highlightedNoteId: string | null;
+  tuningBadgeText?: string;
+  useFlats?: boolean;
   onNoteClick: (note: {
     id: string;
     octaveNote: string;
     degree: IntervalDegree;
     stringNumber: number;
     fret: number;
+    midi: number;
   }) => void;
 }
 
@@ -29,6 +32,8 @@ export const Fretboard: React.FC<FretboardProps> = ({
   intervalColors,
   fretWidth,
   highlightedNoteId,
+  tuningBadgeText = 'Afinación: E Estándar (EADGBE)',
+  useFlats = false,
   onNoteClick,
 }) => {
   const [clickedNoteId, setClickedNoteId] = useState<string | null>(null);
@@ -46,14 +51,15 @@ export const Fretboard: React.FC<FretboardProps> = ({
     octaveNote: string,
     degree: IntervalDegree,
     stringNumber: number,
-    fret: number
+    fret: number,
+    midi: number
   ) => {
     setClickedNoteId(id);
     setTimeout(() => {
       setClickedNoteId((current) => (current === id ? null : current));
     }, 400);
 
-    onNoteClick({ id, octaveNote, degree, stringNumber, fret });
+    onNoteClick({ id, octaveNote, degree, stringNumber, fret, midi });
   };
 
   return (
@@ -64,8 +70,8 @@ export const Fretboard: React.FC<FretboardProps> = ({
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-300">
             Diapasón Interactivo (Trastes 0 al 15)
           </span>
-          <span className="text-[10px] text-gray-400 bg-[#36363a] px-2 py-0.5 rounded-full border border-[#48484c]">
-            Afinación Estándar EADGBE
+          <span className="text-[10px] text-gray-300 bg-[#36363a] px-2.5 py-0.5 rounded-full border border-[#48484c] font-medium">
+            {tuningBadgeText}
           </span>
         </div>
 
@@ -100,7 +106,7 @@ export const Fretboard: React.FC<FretboardProps> = ({
                   <span className="text-[10px] text-gray-400 uppercase font-bold">
                     {str.stringNumber}ª
                   </span>
-                  <span className="text-xs font-black text-amber-200/90 w-7 text-center bg-[#252528] py-0.5 rounded border border-[#3c3c42]">
+                  <span className="text-xs font-black text-amber-200/90 min-w-8 text-center bg-[#252528] py-0.5 px-1 rounded border border-[#3c3c42]">
                     {str.openNote}
                   </span>
                 </div>
@@ -143,7 +149,12 @@ export const Fretboard: React.FC<FretboardProps> = ({
                     {/* Cells for each visible string */}
                     {visibleStrings.map((str) => {
                       const gauge = stringGauges[str.index] || 2;
-                      const { degree, octaveNote } = calculateInterval(str.openMidi, fret, rootIndex);
+                      const { degree, octaveNote } = calculateInterval(
+                        str.openMidi,
+                        fret,
+                        rootIndex,
+                        useFlats
+                      );
 
                       const isIntervalActive = activeIntervalsSet.has(degree);
                       const shouldRenderNote = isIntervalActive && str.notesEnabled;
@@ -151,6 +162,7 @@ export const Fretboard: React.FC<FretboardProps> = ({
                       const noteId = `${str.index}-${fret}`;
                       const isHighlighted = highlightedNoteId === noteId;
                       const isClicked = clickedNoteId === noteId;
+                      const noteMidi = str.openMidi + fret;
 
                       return (
                         <div
@@ -180,7 +192,8 @@ export const Fretboard: React.FC<FretboardProps> = ({
                                   octaveNote,
                                   degree,
                                   str.stringNumber,
-                                  fret
+                                  fret,
+                                  noteMidi
                                 )
                               }
                               style={{
