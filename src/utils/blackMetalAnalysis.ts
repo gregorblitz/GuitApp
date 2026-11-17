@@ -60,24 +60,50 @@ export const BLACK_METAL_MODES: BlackMetalModeInfo[] = [
 ];
 
 /**
- * Finds the most ergonomic string and fret for a given MIDI note,
- * respecting Guitar Pro channel if available, or finding the most natural position
- * with minimal hand shift and prioritizing lower frets (0 to 8).
+ * Requirement 1: Ubicación exacta de Cuerda y Traste tal como viene en el archivo MIDI (Guitar Pro)
+ * 1. Si la pista utiliza canales separados por cuerda (estándar Guitar Pro: canales 0 a 5 o 1 a 6):
+ *    Calcula el traste exacto directamente con traste = note.midi - cuerdaMidiBase[cuerda].
+ *    Si está en el rango 0..15, asigna obligatoriamente esa cuerda y ese traste exactos para la etiqueta RIFF y el brillo verde.
+ * 2. Si el archivo viene en un solo canal plano: Asigna cada nota al traste más bajo y cómodo (traste >= 0 && traste <= 5
+ *    cuando sea posible, priorizando cuerdas al aire traste === 0 y posiciones abiertas en lugar de trastes altos en cuerdas gruesas).
  */
 export function findErgonomicStringAndFret(
   midiNote: number,
   openStrings: readonly number[] = STANDARD_TUNING_MIDI,
-  preferredChannel?: number
+  noteChannel?: number,
+  hasMultiChannelStrings = false
 ): { stringIndex: number; fret: number } {
-  // If channel is within 0..5 (typical Guitar Pro per-string channel export: 0 = string 1, 5 = string 6)
-  if (preferredChannel !== undefined && preferredChannel >= 0 && preferredChannel <= 5) {
-    const candidateFret = midiNote - openStrings[preferredChannel];
-    if (candidateFret >= 0 && candidateFret <= 15) {
-      return { stringIndex: preferredChannel, fret: candidateFret };
+  // 1. Guitar Pro per-string channel detection
+  if (hasMultiChannelStrings && noteChannel !== undefined) {
+    const candidateStringIndices: number[] = [];
+
+    // Option A: 0-based top-down (ch 0 = 1ª aguda [openStrings[0]], ch 5 = 6ª grave [openStrings[5]])
+    if (noteChannel >= 0 && noteChannel <= 5) {
+      candidateStringIndices.push(noteChannel);
+    }
+    // Option B: 1-based top-down (ch 1 = 1ª aguda, ch 6 = 6ª grave)
+    if (noteChannel >= 1 && noteChannel <= 6) {
+      candidateStringIndices.push(noteChannel - 1);
+    }
+    // Option C: 0-based bottom-up (ch 0 = 6ª grave, ch 5 = 1ª aguda)
+    if (noteChannel >= 0 && noteChannel <= 5) {
+      candidateStringIndices.push(5 - noteChannel);
+    }
+    // Option D: 1-based bottom-up (ch 1 = 6ª grave, ch 6 = 1ª aguda)
+    if (noteChannel >= 1 && noteChannel <= 6) {
+      candidateStringIndices.push(5 - (noteChannel - 1));
+    }
+
+    for (const strIdx of candidateStringIndices) {
+      const traste = midiNote - openStrings[strIdx];
+      if (traste >= 0 && traste <= 15) {
+        // Obligatorily assign that exact string and fret without moving to another string!
+        return { stringIndex: strIdx, fret: traste };
+      }
     }
   }
 
-  // Find all possible (string, fret) combinations on the 6 strings
+  // 2. Single flat channel: lowest and most comfortable position
   const validCandidates: { stringIndex: number; fret: number; score: number }[] = [];
 
   for (let s = 0; s < openStrings.length; s++) {
@@ -85,30 +111,41 @@ export function findErgonomicStringAndFret(
     if (fret >= 0 && fret <= 15) {
       let score = 0;
 
-      // Prefer comfortable lower frets (0 to 7)
-      if (fret <= 5) score += 10;
-      else if (fret <= 8) score += 6;
-      else if (fret <= 12) score += 2;
+      // Prioritize open strings (traste === 0)
+      if (fret === 0) {
+        score += 200;
+      }
+      // Prioritize comfortable low open-position frets (1 to 5)
+      else if (fret >= 1 && fret <= 5) {
+        score += 120 - fret * 4;
+      }
+      // Frets 6 to 8
+      else if (fret <= 8) {
+        score += 50 - fret * 3;
+      }
+      // Frets > 8
+      else {
+        score += 20 - fret * 2;
+      }
 
-      // Natural guitar register matching
-      // Low notes (bass riffs <= 50): prefer 6th (s=5) or 5th (s=4)
-      if (midiNote <= 48 && s >= 4) score += 8;
-      // Mid notes (50..62): prefer 4th (s=3) or 3rd (s=2)
-      if (midiNote > 48 && midiNote <= 62 && (s === 2 || s === 3)) score += 6;
-      // High notes (>= 63): prefer 2nd (s=1) or 1st (s=0)
-      if (midiNote >= 63 && s <= 1) score += 6;
+      // Avoid high frets on thicker/heavier strings (strings 5 and 6)
+      if (s >= 4 && fret >= 6) {
+        score -= 80;
+      }
+      if (s >= 3 && fret >= 8) {
+        score -= 50;
+      }
 
       validCandidates.push({ stringIndex: s, fret, score });
     }
   }
 
-  if (validCandidates.length === 0) {
-    return { stringIndex: 0, fret: 0 };
+  if (validCandidates.length > 0) {
+    validCandidates.sort((a, b) => b.score - a.score);
+    return { stringIndex: validCandidates[0].stringIndex, fret: validCandidates[0].fret };
   }
 
-  // Pick highest score
-  validCandidates.sort((a, b) => b.score - a.score);
-  return { stringIndex: validCandidates[0].stringIndex, fret: validCandidates[0].fret };
+  return { stringIndex: 0, fret: 0 };
 }
 
 /**
@@ -248,7 +285,7 @@ export function detectBlackMetalMode(
   pitchClasses: number[],
   lowestNoteMidi?: number
 ): { root: number; mode: BlackMetalModeInfo } {
-  let candidateRoot = lowestNoteMidi !== undefined ? lowestNoteMidi % 12 : pitchClasses[0] ?? 0;
+  const candidateRoot = lowestNoteMidi !== undefined ? lowestNoteMidi % 12 : pitchClasses[0] ?? 0;
 
   let bestScore = -100;
   let bestRoot = candidateRoot;
@@ -321,7 +358,6 @@ export function detectTransitionAlert(
 
   // 2. Mode Change with Same Root
   if (prevMode.id !== currentMode.id) {
-    // Find what interval in currentPitchClasses explains the new mode:
     const relative = currentPitchClasses.map((pc) => ((pc - currentRoot) % 12 + 12) % 12);
 
     if (currentMode.id === 'locrian_diminished' && relative.includes(6)) {
@@ -369,7 +405,6 @@ export function analyzeGlobalSongModality(
     };
   }
 
-  // Count occurrences of (root, mode)
   const modeCounts = new Map<string, { root: number; mode: BlackMetalModeInfo; count: number }>();
 
   measures.forEach((m) => {
@@ -389,7 +424,6 @@ export function analyzeGlobalSongModality(
     }
   }
 
-  // Build modal sections (grouping consecutive measures that share same root and mode)
   const modalSections: ModalSection[] = [];
   let currentSec: ModalSection | null = null;
 
@@ -430,7 +464,8 @@ export function analyzeGlobalSongModality(
 }
 
 /**
- * Parses a MIDI file into whole measures (Compases completos estilo Guitar Pro)
+ * Parses a MIDI file into whole measures (Compases completos estilo Guitar Pro),
+ * correctly mapping Guitar Pro per-string channels or ergonomic flat channel positions.
  */
 export function parseMidiToMeasures(
   arrayBuffer: ArrayBuffer,
@@ -444,7 +479,6 @@ export function parseMidiToMeasures(
 } {
   const midi = new Midi(arrayBuffer);
 
-  // Time signature & Tempo
   const tsObj = midi.header.timeSignatures[0];
   const numerator = tsObj ? tsObj.timeSignature[0] : 4;
   const denominator = tsObj ? tsObj.timeSignature[1] : 4;
@@ -454,7 +488,6 @@ export function parseMidiToMeasures(
   const bpm = tempoObj ? Math.round(tempoObj.bpm) : 120;
   const ppq = midi.header.ppq || 480;
 
-  // Duration of one measure in seconds
   const secondsPerBeat = 60 / bpm;
   const secondsPerMeasure = (numerator / (denominator / 4)) * secondsPerBeat;
   const ticksPerMeasure = numerator * (ppq * 4 / denominator);
@@ -513,6 +546,12 @@ export function parseMidiToMeasures(
     };
   }
 
+  // Detect whether this track uses multiple channels for its notes (Guitar Pro per-string channel export)
+  const uniqueChannels = new Set(
+    activeTrack.notes.map((n) => (n as { channel?: number }).channel ?? activeTrack.channel)
+  );
+  const hasMultiChannelStrings = uniqueChannels.size > 1;
+
   // Sort notes by start time, then lowest pitch first
   const sortedNotes = [...activeTrack.notes].sort((a, b) => {
     if (Math.abs(a.time - b.time) < 0.001) {
@@ -525,7 +564,6 @@ export function parseMidiToMeasures(
   const measureBuckets = new Map<number, MidiNoteEvent[]>();
 
   sortedNotes.forEach((n) => {
-    // Calculate measure index using ticks if available, or seconds
     let mIdx = 0;
     if (n.ticks !== undefined && ticksPerMeasure > 0) {
       mIdx = Math.floor(n.ticks / ticksPerMeasure);
@@ -535,12 +573,14 @@ export function parseMidiToMeasures(
 
     const measureStartTime = mIdx * secondsPerMeasure;
     const timeOffset = Math.max(0, n.time - measureStartTime);
-
     const noteChannel = (n as { channel?: number }).channel ?? activeTrack.channel;
+
+    // Requirement 1: String & Fret calculation
     const { stringIndex, fret } = findErgonomicStringAndFret(
       n.midi,
       openStrings,
-      noteChannel
+      noteChannel,
+      hasMultiChannelStrings
     );
     const noteId = `${stringIndex}-${fret}`;
 
@@ -564,7 +604,6 @@ export function parseMidiToMeasures(
     measureBuckets.get(mIdx)!.push(event);
   });
 
-  // Build sequential MidiMeasures
   const measureIndices = Array.from(measureBuckets.keys()).sort((a, b) => a - b);
   const measures: MidiMeasure[] = [];
 
@@ -573,7 +612,7 @@ export function parseMidiToMeasures(
 
   measureIndices.forEach((mIdx, displayOrder) => {
     const rawEvents = measureBuckets.get(mIdx) || [];
-    const measureNumber = displayOrder + 1; // Compás 1, Compás 2...
+    const measureNumber = displayOrder + 1;
     const timeStart = mIdx * secondsPerMeasure;
     const timeEnd = timeStart + secondsPerMeasure;
 
@@ -628,92 +667,83 @@ export function parseMidiToMeasures(
 
 /**
  * Built-in Legendary Black Metal Demo Riff Progression by Measures
- * (8 full measures with authentic rhythms, arpeggios, and modal transitions)
+ * (8 full measures with authentic rhythms, arpeggios, and exact string/fret channels)
  */
 export function getDemoBlackMetalMeasures(
   openStrings: readonly number[] = STANDARD_TUNING_MIDI
 ): { measures: MidiMeasure[]; globalAnalysis: GlobalMidiSongAnalysis } {
-  // 8 Measures:
-  // Compás 1: E Frigio (Riff con trémolo E2 -> B2 -> F3)
-  // Compás 2: E Frigio (Acentuación rítmica b2 y 5ta)
-  // Compás 3: E Locrio (Entra Bb / b5 - Tritono Mayhem style!)
-  // Compás 4: E Locrio (Cadencia disonante con b5 y b2)
-  // Compás 5: C Menor Nórdico (Salto de 3ra menor descendente a C con b6, estilo Dissection / Immortal)
-  // Compás 6: C Menor Nórdico (Arpegio melódico atmosférico)
-  // Compás 7: B Frigio Dominante (Tensión ritualística con D# y G)
-  // Compás 8: E Menor Armónica (Resolución neoclásica con D# y E)
-
+  // 8 Measures with channels matching standard Guitar Pro 0..5 (0 = 1st high E, 5 = 6th low E):
   const rawMeasuresData = [
-    // Compás 1: E Frigio
+    // Compás 1: E Frigio (E2, B2, F3)
     {
       notes: [
-        { midi: 40, offset: 0.0, dur: 0.45 },
-        { midi: 40, offset: 0.5, dur: 0.45 },
-        { midi: 47, offset: 1.0, dur: 0.45 },
-        { midi: 53, offset: 1.5, dur: 0.45 }, // F3 (b2)
+        { midi: 40, offset: 0.0, dur: 0.45, channel: 5 }, // 6ª Cuerda al aire
+        { midi: 40, offset: 0.5, dur: 0.45, channel: 5 },
+        { midi: 47, offset: 1.0, dur: 0.45, channel: 4 }, // 5ª Cuerda Traste 2
+        { midi: 53, offset: 1.5, dur: 0.45, channel: 3 }, // 4ª Cuerda Traste 3 (F3 b2)
       ],
     },
     // Compás 2: E Frigio
     {
       notes: [
-        { midi: 40, offset: 0.0, dur: 0.45 },
-        { midi: 53, offset: 0.5, dur: 0.45 }, // F3 (b2)
-        { midi: 47, offset: 1.0, dur: 0.45 },
-        { midi: 40, offset: 1.5, dur: 0.45 },
+        { midi: 40, offset: 0.0, dur: 0.45, channel: 5 },
+        { midi: 53, offset: 0.5, dur: 0.45, channel: 3 }, // F3 b2
+        { midi: 47, offset: 1.0, dur: 0.45, channel: 4 },
+        { midi: 40, offset: 1.5, dur: 0.45, channel: 5 },
       ],
     },
     // Compás 3: E Locrio (entra Bb / b5 Tritono)
     {
       notes: [
-        { midi: 40, offset: 0.0, dur: 0.45 },
-        { midi: 46, offset: 0.5, dur: 0.45 }, // Bb2 (b5 Tritono!)
-        { midi: 52, offset: 1.0, dur: 0.45 },
-        { midi: 46, offset: 1.5, dur: 0.45 },
+        { midi: 40, offset: 0.0, dur: 0.45, channel: 5 },
+        { midi: 46, offset: 0.5, dur: 0.45, channel: 4 }, // 5ª Cuerda Traste 1 (Bb2 b5 Tritono!)
+        { midi: 52, offset: 1.0, dur: 0.45, channel: 3 }, // 4ª Cuerda Traste 2
+        { midi: 46, offset: 1.5, dur: 0.45, channel: 4 },
       ],
     },
     // Compás 4: E Locrio
     {
       notes: [
-        { midi: 40, offset: 0.0, dur: 0.45 },
-        { midi: 46, offset: 0.5, dur: 0.45 }, // Bb2
-        { midi: 53, offset: 1.0, dur: 0.45 }, // F3 (b2)
-        { midi: 40, offset: 1.5, dur: 0.45 },
+        { midi: 40, offset: 0.0, dur: 0.45, channel: 5 },
+        { midi: 46, offset: 0.5, dur: 0.45, channel: 4 },
+        { midi: 53, offset: 1.0, dur: 0.45, channel: 3 }, // F3 b2
+        { midi: 40, offset: 1.5, dur: 0.45, channel: 5 },
       ],
     },
     // Compás 5: C Menor Nórdico (Salto a C con b6)
     {
       notes: [
-        { midi: 48, offset: 0.0, dur: 0.45 }, // C3
-        { midi: 55, offset: 0.5, dur: 0.45 }, // G3
-        { midi: 56, offset: 1.0, dur: 0.45 }, // Ab3 (b6)
-        { midi: 48, offset: 1.5, dur: 0.45 },
+        { midi: 48, offset: 0.0, dur: 0.45, channel: 4 }, // 5ª Cuerda Traste 3 (C3)
+        { midi: 55, offset: 0.5, dur: 0.45, channel: 2 }, // 3ª Cuerda al aire (G3)
+        { midi: 56, offset: 1.0, dur: 0.45, channel: 2 }, // 3ª Cuerda Traste 1 (Ab3 b6)
+        { midi: 48, offset: 1.5, dur: 0.45, channel: 4 },
       ],
     },
     // Compás 6: C Menor Nórdico
     {
       notes: [
-        { midi: 48, offset: 0.0, dur: 0.45 },
-        { midi: 56, offset: 0.5, dur: 0.45 }, // Ab3
-        { midi: 55, offset: 1.0, dur: 0.45 },
-        { midi: 51, offset: 1.5, dur: 0.45 }, // Eb3 (b3)
+        { midi: 48, offset: 0.0, dur: 0.45, channel: 4 },
+        { midi: 56, offset: 0.5, dur: 0.45, channel: 2 },
+        { midi: 55, offset: 1.0, dur: 0.45, channel: 2 },
+        { midi: 51, offset: 1.5, dur: 0.45, channel: 3 }, // 4ª Cuerda Traste 1 (Eb3 b3)
       ],
     },
     // Compás 7: B Frigio Dominante
     {
       notes: [
-        { midi: 47, offset: 0.0, dur: 0.45 }, // B2
-        { midi: 54, offset: 0.5, dur: 0.45 }, // F#3
-        { midi: 63, offset: 1.0, dur: 0.45 }, // D#4 (3ra Mayor)
-        { midi: 67, offset: 1.5, dur: 0.45 }, // G4 (b6)
+        { midi: 47, offset: 0.0, dur: 0.45, channel: 4 }, // 5ª Cuerda Traste 2 (B2)
+        { midi: 54, offset: 0.5, dur: 0.45, channel: 3 }, // 4ª Cuerda Traste 4 (F#3)
+        { midi: 63, offset: 1.0, dur: 0.45, channel: 1 }, // 2ª Cuerda Traste 4 (D#4 3ra Mayor)
+        { midi: 67, offset: 1.5, dur: 0.45, channel: 0 }, // 1ª Cuerda Traste 3 (G4 b6)
       ],
     },
     // Compás 8: E Menor Armónica
     {
       notes: [
-        { midi: 40, offset: 0.0, dur: 0.45 }, // E2
-        { midi: 47, offset: 0.5, dur: 0.45 }, // B2
-        { midi: 63, offset: 1.0, dur: 0.45 }, // D#4 (7ma Mayor)
-        { midi: 64, offset: 1.5, dur: 0.45 }, // E4
+        { midi: 40, offset: 0.0, dur: 0.45, channel: 5 }, // 6ª Cuerda al aire
+        { midi: 47, offset: 0.5, dur: 0.45, channel: 4 }, // 5ª Cuerda Traste 2
+        { midi: 63, offset: 1.0, dur: 0.45, channel: 1 }, // 2ª Cuerda Traste 4 (D#4 7ma Mayor)
+        { midi: 64, offset: 1.5, dur: 0.45, channel: 0 }, // 1ª Cuerda al aire (E4)
       ],
     },
   ];
@@ -730,7 +760,7 @@ export function getDemoBlackMetalMeasures(
     const timeEnd = timeStart + secondsPerMeasure;
 
     const events: MidiNoteEvent[] = mData.notes.map((n) => {
-      const { stringIndex, fret } = findErgonomicStringAndFret(n.midi, openStrings);
+      const { stringIndex, fret } = findErgonomicStringAndFret(n.midi, openStrings, n.channel, true);
       const noteId = `${stringIndex}-${fret}`;
       return {
         midi: n.midi,
@@ -740,6 +770,7 @@ export function getDemoBlackMetalMeasures(
         duration: n.dur,
         timeOffset: n.offset,
         velocity: 0.85,
+        channel: n.channel,
         stringIndex,
         fret,
         noteId,

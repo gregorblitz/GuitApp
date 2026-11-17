@@ -15,9 +15,6 @@ export type HighlightCallback = (noteId: string | null) => void;
 class AudioEngine {
   private static instance: AudioEngine;
   private synth: Tone.PolySynth | null = null;
-  private filter: Tone.Filter | null = null;
-  private chorus: Tone.Chorus | null = null;
-  private reverb: Tone.Reverb | null = null;
   private limiter: Tone.Limiter | null = null;
   private isInitialized = false;
 
@@ -35,42 +32,22 @@ class AudioEngine {
     return AudioEngine.instance;
   }
 
+  /**
+   * Initializes the persistent audio singleton with high polyphony (24 voices)
+   * and fast envelope for responsive Black Metal tremolo picking and arpeggios.
+   */
   public async init(): Promise<void> {
-    if (this.isInitialized) return;
+    if (this.isInitialized && this.synth) return;
 
     try {
       if (Tone.context.state !== 'running') {
         await Tone.start();
       }
 
-      // Limiter at -3dB
+      // Limiter at -3dB to prevent clipping with dense chords and fast tremolos
       this.limiter = new Tone.Limiter(-3).toDestination();
 
-      // Reverb with wet 0.2
-      this.reverb = new Tone.Reverb({
-        decay: 1.8,
-        preDelay: 0.01,
-        wet: 0.2,
-      }).connect(this.limiter);
-      await this.reverb.generate();
-
-      // Subtle Chorus
-      this.chorus = new Tone.Chorus({
-        frequency: 1.5,
-        delayTime: 3.5,
-        depth: 0.3,
-        wet: 0.18,
-      }).connect(this.reverb);
-      this.chorus.start();
-
-      // Lowpass filter at 2600 Hz
-      this.filter = new Tone.Filter({
-        frequency: 2600,
-        type: 'lowpass',
-        rolloff: -12,
-      }).connect(this.chorus);
-
-      // PolySynth with clean guitar fat sawtooth oscillator
+      // Persistent single PolySynth instance with maxPolyphony 24
       this.synth = new Tone.PolySynth(Tone.Synth, {
         oscillator: {
           type: 'fatsawtooth',
@@ -79,12 +56,13 @@ class AudioEngine {
         },
         envelope: {
           attack: 0.005,
-          decay: 1.1,
-          sustain: 0.1,
-          release: 1.0,
+          decay: 0.2,
+          sustain: 0.3,
+          release: 0.4,
         },
-        volume: -4,
-      }).connect(this.filter);
+        volume: -2,
+      }).connect(this.limiter);
+      this.synth.maxPolyphony = 24;
 
       this.isInitialized = true;
     } catch (e) {
@@ -121,8 +99,26 @@ class AudioEngine {
   }
 
   /**
+   * Stop any current playback immediately and release all ringing voices.
+   */
+  public stopAllPlayback(): void {
+    try {
+      Tone.Transport.cancel();
+      if (this.synth) {
+        this.synth.releaseAll();
+      }
+    } catch (err) {
+      console.warn('Playback stop error:', err);
+    }
+    this.isPlayingMeasure = false;
+  }
+
+  /**
    * Plays a complete measure with its exact timing and rhythmic offsets,
    * scheduling synchronized neon-green real-time illumination.
+   * Requirement 2:
+   * await Tone.start(), Tone.Transport.cancel(), synth.releaseAll()
+   * schedule from now = Tone.now() + 0.02
    */
   public async playMeasureRhythm(
     notes: { midi: number; timeOffset: number; duration: number; noteId?: string }[],
@@ -136,26 +132,33 @@ class AudioEngine {
       return;
     }
 
+    // Stop any previous playback and release ringing voices immediately
+    this.stopAllPlayback();
     this.isPlayingMeasure = true;
-    const startTime = Tone.now() + 0.05;
-    let maxEndTime = startTime;
+
+    // Fixed relative start time from now = Tone.now() + 0.02
+    const now = Tone.now() + 0.02;
+    let maxEndTime = now;
 
     notes.forEach((note) => {
-      const noteTime = startTime + Math.max(0, note.timeOffset);
-      const duration = Math.max(0.12, note.duration);
-      const noteEndTime = noteTime + duration;
+      const noteStartTime = now + Math.max(0, note.timeOffset);
+      const noteDuration = Math.max(note.duration, 0.12);
+      const noteEndTime = noteStartTime + noteDuration;
+
       if (noteEndTime > maxEndTime) {
         maxEndTime = noteEndTime;
       }
 
-      const noteName = Tone.Frequency(note.midi, 'midi').toNote();
-      this.synth!.triggerAttackRelease(noteName, duration, noteTime);
+      const freq = Tone.Frequency(note.midi, 'midi').toNote();
+      this.synth!.triggerAttackRelease(freq, noteDuration, noteStartTime);
 
       if (note.noteId) {
+        // Precise visual illumination at noteStartTime
         Tone.Draw.schedule(() => {
           onNoteStart(note.noteId!);
-        }, noteTime);
+        }, noteStartTime);
 
+        // Turn off green illumination at noteEndTime
         Tone.Draw.schedule(() => {
           onNoteEnd(note.noteId!);
         }, noteEndTime);
@@ -165,7 +168,7 @@ class AudioEngine {
     Tone.Draw.schedule(() => {
       this.isPlayingMeasure = false;
       onFinish();
-    }, maxEndTime + 0.05);
+    }, maxEndTime + 0.02);
   }
 
   public setBpm(bpm: number): void {
