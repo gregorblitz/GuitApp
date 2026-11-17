@@ -8,8 +8,9 @@ import { Fretboard } from './components/Fretboard';
 import { ChordPresets } from './components/ChordPresets';
 import { MidiAnalyzer } from './components/MidiAnalyzer';
 import type {
+  GlobalMidiSongAnalysis,
   IntervalDegree,
-  MidiStep,
+  MidiMeasure,
   MidiTrackInfo,
   StringConfig,
   TuningId,
@@ -25,7 +26,7 @@ import {
   findVoicingNotes,
   calculateInterval,
 } from './utils/musicTheory';
-import { getDemoBlackMetalSteps, parseMidiToSteps } from './utils/blackMetalAnalysis';
+import { getDemoBlackMetalMeasures, parseMidiToMeasures } from './utils/blackMetalAnalysis';
 import { audioEngine, type ArpNoteItem } from './services/audio';
 
 export function App() {
@@ -43,10 +44,10 @@ export function App() {
   // 3. Fret zoom / width in pixels (50px to 110px, default 76px)
   const [fretWidth, setFretWidth] = useState<number>(76);
 
-  // 4. Color palette (8 slots)
+  // 4. Color palette (8 slots) - Initialized with 8 high-contrast colors (Fase 5.2)
   const [paletteColors, setPaletteColors] = useState<string[]>(INITIAL_PALETTE_COLORS);
 
-  // 5. Tuning selector (E Estándar, Eb Estándar, D Estándar) - Fase 4
+  // 5. Tuning selector (E Estándar, Eb Estándar, D Estándar)
   const [selectedTuning, setSelectedTuning] = useState<TuningId>('standard_e');
 
   // 6. 6-String control configuration
@@ -58,13 +59,18 @@ export function App() {
   const [isArpeggiating, setIsArpeggiating] = useState<boolean>(false);
   const [highlightedNoteId, setHighlightedNoteId] = useState<string | null>(null);
 
-  // 8. Fase 5: Analizador MIDI Black Metal state
+  // 8. Fase 5.2: Analizador MIDI por Compases & Sincronización en Vivo
   const [isMidiModeActive, setIsMidiModeActive] = useState<boolean>(false);
-  const [midiSteps, setMidiSteps] = useState<MidiStep[]>([]);
-  const [currentMidiStepIndex, setCurrentMidiStepIndex] = useState<number>(0);
+  const [midiMeasures, setMidiMeasures] = useState<MidiMeasure[]>([]);
+  const [currentMeasureIndex, setCurrentMeasureIndex] = useState<number>(0);
+  const [globalSongAnalysis, setGlobalSongAnalysis] = useState<GlobalMidiSongAnalysis | null>(null);
   const [midiTracks, setMidiTracks] = useState<MidiTrackInfo[]>([]);
   const [selectedMidiTrackIndex, setSelectedMidiTrackIndex] = useState<number>(0);
   const [savedUserChord, setSavedUserChord] = useState<{ root: number; intervals: IntervalDegree[] } | null>(null);
+
+  // Live real-time illumination state for ▶ Reproducir Compás
+  const [livePlayingNoteIds, setLivePlayingNoteIds] = useState<string[]>([]);
+  const [isPlayingMeasureLive, setIsPlayingMeasureLive] = useState<boolean>(false);
 
   // Ref to global hidden file input for header "Subir MIDI" button
   const headerFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -72,7 +78,12 @@ export function App() {
   // Avoid auto-strum on initial mount before user gesture
   const isFirstMount = useRef(true);
 
-  // When tuning changes, update stringsConfig while preserving user's notesEnabled and stringVisible states
+  // Current tuning open string MIDI values
+  const currentOpenStrings = useMemo(() => {
+    return TUNING_CONFIGS[selectedTuning].stringsMidi;
+  }, [selectedTuning]);
+
+  // When tuning changes, update stringsConfig while preserving user toggles
   const handleChangeTuning = useCallback((newTuningId: TuningId) => {
     setSelectedTuning(newTuningId);
     const newTuning = TUNING_CONFIGS[newTuningId];
@@ -82,21 +93,19 @@ export function App() {
   const isFlatTuning = selectedTuning === 'standard_eb';
 
   // --- COMPUTED DERIVED STATE ---
-  // Color mapping: interval -> hex color
   const intervalColors = useMemo(() => {
     return mapActiveIntervalsToColors(activeIntervals, paletteColors);
   }, [activeIntervals, paletteColors]);
 
-  // Slot assignments: slotIndex (0..7) -> interval degree currently occupying it
   const slotAssignments = useMemo(() => {
     return getSlotAssignments(activeIntervals);
   }, [activeIntervals]);
 
-  // Current active MIDI step
-  const activeMidiStep = useMemo<MidiStep | null>(() => {
-    if (!isMidiModeActive || midiSteps.length === 0) return null;
-    return midiSteps[currentMidiStepIndex] || null;
-  }, [isMidiModeActive, midiSteps, currentMidiStepIndex]);
+  // Current active MIDI measure
+  const activeMidiMeasure = useMemo<MidiMeasure | null>(() => {
+    if (!isMidiModeActive || midiMeasures.length === 0) return null;
+    return midiMeasures[currentMeasureIndex] || null;
+  }, [isMidiModeActive, midiMeasures, currentMeasureIndex]);
 
   // Collect all visible notes on the fretboard for the arpeggiator
   const visibleFretboardNotes = useMemo<ArpNoteItem[]>(() => {
@@ -129,7 +138,6 @@ export function App() {
     return list;
   }, [stringsConfig, activeIntervals, rootIndex, isFlatTuning]);
 
-  // Voicing notes for chord strumming across active strings
   const voicingNotes = useMemo(() => {
     return findVoicingNotes(stringsConfig, activeIntervals, rootIndex);
   }, [stringsConfig, activeIntervals, rootIndex]);
@@ -140,7 +148,6 @@ export function App() {
     setIsAudioReady(true);
   }, []);
 
-  // Strum current chord voicing
   const handleStrumChord = useCallback(async () => {
     await activateAudio();
     if (voicingNotes.length > 0) {
@@ -148,7 +155,6 @@ export function App() {
     }
   }, [activateAudio, voicingNotes]);
 
-  // Play single note on fret click (respects exact tuning frequency)
   const handleFretboardNoteClick = useCallback(
     async (note: { id: string; octaveNote: string }) => {
       await activateAudio();
@@ -157,16 +163,36 @@ export function App() {
     [activateAudio]
   );
 
-  // Play specific MIDI step
-  const handlePlayMidiStep = useCallback(
-    async (step: MidiStep) => {
+  // ▶ Reproducir Compás Completo con Sincronización en Vivo (Fase 5.2)
+  const handlePlayMeasure = useCallback(
+    async (measure: MidiMeasure) => {
       await activateAudio();
-      audioEngine.playMidiStep(step.exactMidiNumbers, '2n');
+      setIsPlayingMeasureLive(true);
+      setLivePlayingNoteIds([]);
+
+      await audioEngine.playMeasureRhythm(
+        measure.notes.map((n) => ({
+          midi: n.midi,
+          timeOffset: n.timeOffset,
+          duration: n.duration,
+          noteId: `${n.stringIndex}-${n.fret}`,
+        })),
+        (noteId) => {
+          setLivePlayingNoteIds((prev) => Array.from(new Set([...prev, noteId])));
+        },
+        (noteId) => {
+          setLivePlayingNoteIds((prev) => prev.filter((id) => id !== noteId));
+        },
+        () => {
+          setIsPlayingMeasureLive(false);
+          setLivePlayingNoteIds([]);
+        }
+      );
     },
     [activateAudio]
   );
 
-  // Auto-strum when Root note, intervals, or tuning changes in normal mode
+  // Auto-strum in normal mode
   useEffect(() => {
     if (isFirstMount.current) {
       isFirstMount.current = false;
@@ -178,19 +204,16 @@ export function App() {
     }
   }, [rootIndex, activeIntervals, selectedTuning, voicingNotes, isMidiModeActive]);
 
-  // Sync BPM with Tone.Transport
   useEffect(() => {
     audioEngine.setBpm(bpm);
   }, [bpm]);
 
-  // Stop arpeggiator on unmount
   useEffect(() => {
     return () => {
       audioEngine.stopArpeggiator();
     };
   }, []);
 
-  // Toggle Arpeggiator (Play / Stop)
   const handleToggleArpeggio = useCallback(async () => {
     await activateAudio();
 
@@ -216,7 +239,6 @@ export function App() {
     }
   }, [activateAudio, isArpeggiating, visibleFretboardNotes, bpm]);
 
-  // Update running arpeggiator if visible notes change
   useEffect(() => {
     if (isArpeggiating) {
       if (visibleFretboardNotes.length === 0) {
@@ -235,45 +257,51 @@ export function App() {
     }
   }, [visibleFretboardNotes, isArpeggiating, bpm]);
 
-  // --- MIDI ANALYZER LOGIC (Fase 5) ---
-  const handleLoadMidiData = useCallback(
-    (steps: MidiStep[], tracks: MidiTrackInfo[], selectedTrack: number) => {
+  // --- MIDI MEASURE ANALYZER LOGIC (Fase 5.2) ---
+  const handleLoadMidiMeasures = useCallback(
+    (
+      measures: MidiMeasure[],
+      globalAnalysis: GlobalMidiSongAnalysis,
+      tracks: MidiTrackInfo[],
+      selectedTrack: number
+    ) => {
       if (!isMidiModeActive) {
         setSavedUserChord({ root: rootIndex, intervals: activeIntervals });
       }
 
-      setMidiSteps(steps);
+      setMidiMeasures(measures);
+      setGlobalSongAnalysis(globalAnalysis);
       setMidiTracks(tracks);
       setSelectedMidiTrackIndex(selectedTrack);
-      setCurrentMidiStepIndex(0);
+      setCurrentMeasureIndex(0);
       setIsMidiModeActive(true);
 
-      // Apply first step root and scale
-      if (steps.length > 0) {
-        const first = steps[0];
+      if (measures.length > 0) {
+        const first = measures[0];
         setRootIndex(first.detectedRoot);
         setActiveIntervals(first.detectedScale.degrees);
-        handlePlayMidiStep(first);
       }
     },
-    [isMidiModeActive, rootIndex, activeIntervals, handlePlayMidiStep]
+    [isMidiModeActive, rootIndex, activeIntervals]
   );
 
-  const handleMidiStepChange = useCallback(
+  const handleMeasureChange = useCallback(
     (newIndex: number) => {
-      setCurrentMidiStepIndex(newIndex);
-      const step = midiSteps[newIndex];
-      if (step) {
-        // Automatically light up detected root and mode
-        setRootIndex(step.detectedRoot);
-        setActiveIntervals(step.detectedScale.degrees);
+      setCurrentMeasureIndex(newIndex);
+      const measure = midiMeasures[newIndex];
+      if (measure) {
+        // Automatically light up detected root and mode for this measure
+        setRootIndex(measure.detectedRoot);
+        setActiveIntervals(measure.detectedScale.degrees);
       }
     },
-    [midiSteps]
+    [midiMeasures]
   );
 
   const handleExitMidiMode = useCallback(() => {
     setIsMidiModeActive(false);
+    setIsPlayingMeasureLive(false);
+    setLivePlayingNoteIds([]);
     if (savedUserChord) {
       setRootIndex(savedUserChord.root);
       setActiveIntervals(savedUserChord.intervals);
@@ -284,24 +312,25 @@ export function App() {
     if (isMidiModeActive) {
       handleExitMidiMode();
     } else {
-      if (midiSteps.length === 0) {
-        // Load demo riff by default
-        const demo = getDemoBlackMetalSteps();
-        handleLoadMidiData(
-          demo,
-          [{ index: 0, name: 'Demo: Black Metal Riff (Emperor/Mayhem Style)', notesCount: 18, channel: 1, isGuitar: true }],
+      if (midiMeasures.length === 0) {
+        // Load demo Black Metal measures
+        const demo = getDemoBlackMetalMeasures(currentOpenStrings);
+        handleLoadMidiMeasures(
+          demo.measures,
+          demo.globalAnalysis,
+          [{ index: 0, name: 'Guitar Pro: Black Metal Riff & Modal Shifts', notesCount: 32, channel: 0, isGuitar: true }],
           0
         );
       } else {
         setIsMidiModeActive(true);
-        const step = midiSteps[currentMidiStepIndex];
-        if (step) {
-          setRootIndex(step.detectedRoot);
-          setActiveIntervals(step.detectedScale.degrees);
+        const measure = midiMeasures[currentMeasureIndex];
+        if (measure) {
+          setRootIndex(measure.detectedRoot);
+          setActiveIntervals(measure.detectedScale.degrees);
         }
       }
     }
-  }, [isMidiModeActive, midiSteps, currentMidiStepIndex, handleExitMidiMode, handleLoadMidiData]);
+  }, [isMidiModeActive, midiMeasures, currentMeasureIndex, currentOpenStrings, handleExitMidiMode, handleLoadMidiMeasures]);
 
   // Header "Subir MIDI" button click handler
   const handleHeaderUploadMidiClick = () => {
@@ -314,9 +343,14 @@ export function App() {
 
     try {
       const buffer = await file.arrayBuffer();
-      const parsed = parseMidiToSteps(buffer);
-      if (parsed.steps.length > 0) {
-        handleLoadMidiData(parsed.steps, parsed.tracks, parsed.selectedTrack);
+      const parsed = parseMidiToMeasures(buffer, currentOpenStrings);
+      if (parsed.measures.length > 0) {
+        handleLoadMidiMeasures(
+          parsed.measures,
+          parsed.globalAnalysis,
+          parsed.tracks,
+          parsed.selectedTrack
+        );
       } else {
         alert('No se encontraron notas en la pista seleccionada del archivo MIDI.');
       }
@@ -398,22 +432,6 @@ export function App() {
           onUploadMidiClick={handleHeaderUploadMidiClick}
         />
 
-        {/* Fase 5: Analizador MIDI de Black Metal (Paso a Paso) */}
-        {isMidiModeActive && (
-          <MidiAnalyzer
-            steps={midiSteps}
-            currentStepIndex={currentMidiStepIndex}
-            tracks={midiTracks}
-            selectedTrackIndex={selectedMidiTrackIndex}
-            onSelectTrack={(trackIdx) => setSelectedMidiTrackIndex(trackIdx)}
-            onStepChange={handleMidiStepChange}
-            onPlayStep={handlePlayMidiStep}
-            onLoadMidiData={handleLoadMidiData}
-            onExitMidiMode={handleExitMidiMode}
-            intervalColors={intervalColors}
-          />
-        )}
-
         {/* Quick Chord Presets & Guided Explorer (Fase 4) */}
         {!isMidiModeActive && (
           <ChordPresets
@@ -433,7 +451,7 @@ export function App() {
             <PianoKeyboard
               mode="root"
               title="1. Selector de Nota Raíz"
-              subtitle={isMidiModeActive ? 'Raíz Detectada en Riff' : 'Exclusivo (Ilumina #fff8e7)'}
+              subtitle={isMidiModeActive ? 'Raíz del Compás Activo' : 'Exclusivo (Ilumina #fff8e7)'}
               selectedRootIndex={rootIndex}
               onSelectRoot={handleSelectRoot}
             />
@@ -442,7 +460,7 @@ export function App() {
             <PianoKeyboard
               mode="interval"
               title="2. Selector de Intervalos"
-              subtitle={isMidiModeActive ? 'Modo Black Metal Sugerido' : 'Selección Múltiple (Paleta de Colores)'}
+              subtitle={isMidiModeActive ? 'Modo de Compás Detectado' : 'Selección Múltiple (Paleta de Colores)'}
               activeIntervals={activeIntervals}
               onToggleInterval={handleToggleInterval}
               intervalColors={intervalColors}
@@ -479,7 +497,28 @@ export function App() {
           </div>
         </div>
 
-        {/* 2. PANEL INFERIOR (Diapasón) */}
+        {/* 1. UBICACIÓN DEL ANALIZADOR MIDI: JUSTO ENCIMA DEL DIAPASÓN INTERACTIVO (Requisito 1) */}
+        {isMidiModeActive && (
+          <div className="mt-1">
+            <MidiAnalyzer
+              measures={midiMeasures}
+              currentMeasureIndex={currentMeasureIndex}
+              globalAnalysis={globalSongAnalysis}
+              tracks={midiTracks}
+              selectedTrackIndex={selectedMidiTrackIndex}
+              openStringsMidi={currentOpenStrings}
+              onSelectTrack={(trackIdx) => setSelectedMidiTrackIndex(trackIdx)}
+              onMeasureChange={handleMeasureChange}
+              onPlayMeasure={handlePlayMeasure}
+              onLoadMidiMeasures={handleLoadMidiMeasures}
+              onExitMidiMode={handleExitMidiMode}
+              isPlayingMeasureLive={isPlayingMeasureLive}
+              intervalColors={intervalColors}
+            />
+          </div>
+        )}
+
+        {/* 2. PANEL INFERIOR (Diapasón Interactivo) */}
         <div className="mt-1">
           <Fretboard
             strings={stringsConfig}
@@ -490,8 +529,11 @@ export function App() {
             highlightedNoteId={highlightedNoteId}
             tuningBadgeText={TUNING_CONFIGS[selectedTuning].badgeText}
             useFlats={isFlatTuning}
-            activeRiffMidiNumbers={activeMidiStep ? activeMidiStep.exactMidiNumbers : []}
-            activeRiffPitchClasses={activeMidiStep ? activeMidiStep.pitchClasses : []}
+            // Requisitos 3: Diferenciación exactísima (RIFF vs Octavas Equivalentes + Iluminación en Vivo)
+            exactRiffTargetIds={isMidiModeActive && activeMidiMeasure ? activeMidiMeasure.exactTargetIds : []}
+            equivalentRiffMidiNumbers={isMidiModeActive && activeMidiMeasure ? activeMidiMeasure.exactMidiNumbers : []}
+            equivalentRiffPitchClasses={isMidiModeActive && activeMidiMeasure ? activeMidiMeasure.pitchClasses : []}
+            livePlayingNoteIds={livePlayingNoteIds}
             onNoteClick={handleFretboardNoteClick}
           />
         </div>
@@ -504,7 +546,7 @@ export function App() {
             {TUNING_CONFIGS[selectedTuning].label}: {TUNING_CONFIGS[selectedTuning].subtitle}
           </span>
           <span>•</span>
-          <span>Analizador de Riffs Black Metal & Síntesis Tone.PolySynth</span>
+          <span>Analizador por Compases Estilo Guitar Pro con Destello en Vivo #00FF66</span>
         </footer>
       </div>
     </div>

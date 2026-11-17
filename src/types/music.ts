@@ -29,36 +29,36 @@ export type IntervalDegree =
 export interface IntervalInfo {
   semitones: number;
   degree: IntervalDegree;
-  label: string; // e.g. "R", "2/9", "b3/#9"
+  label: string;
   isBlack: boolean;
   nameEs: string;
 }
 
 export interface FretboardNote {
-  stringIndex: number; // 0 (1st string / high E) to 5 (6th string / low E)
-  fret: number; // 0 to 15
+  stringIndex: number;
+  fret: number;
   midi: number;
   noteName: NoteName;
-  octaveNote: string; // e.g. "E4"
+  octaveNote: string;
   semitonesFromRoot: number;
   degree: IntervalDegree;
   isActive: boolean;
   color: string;
-  id: string; // unique identifier: `${stringIndex}-${fret}`
+  id: string;
 }
 
 export interface StringConfig {
-  index: number; // 0 to 5
-  stringNumber: number; // 1 to 6
-  name: string; // e.g. "1ª Cuerda (E4)"
+  index: number;
+  stringNumber: number;
+  name: string;
   openMidi: number;
   openNote: string;
-  notesEnabled: boolean; // Column 1: activates/deactivates notes of this string
-  stringVisible: boolean; // Column 2: shows/hides the string row entirely
+  notesEnabled: boolean;
+  stringVisible: boolean;
 }
 
 export interface ColorSlot {
-  id: number; // 0 to 7
+  id: number;
   color: string;
   hex: string;
   assignedDegree?: IntervalDegree;
@@ -68,11 +68,10 @@ export type TuningId = 'standard_e' | 'standard_eb' | 'standard_d';
 
 export interface TuningConfig {
   id: TuningId;
-  label: string; // exact dropdown text: "E Estándar (Por defecto)", etc.
+  label: string;
   name: string;
-  subtitle: string; // notes description: "E, A, D, G, B, E"
-  badgeText: string; // text for fretboard header
-  // Strings from 1st (high) to 6th (low):
+  subtitle: string;
+  badgeText: string;
   stringsMidi: [number, number, number, number, number, number];
   openNotes: [string, string, string, string, string, string];
 }
@@ -91,7 +90,7 @@ export interface ExplorerPreset {
   description: string;
 }
 
-// --- FASE 5: ANALIZADOR MIDI BLACK METAL ---
+// --- FASE 5 & 5.2: ANALIZADOR MIDI POR COMPASES ---
 export interface BlackMetalModeInfo {
   id: string;
   name: string;
@@ -106,23 +105,49 @@ export interface MidiNoteEvent {
   midi: number;
   pitchClass: number; // 0..11
   name: string; // e.g. "E3"
-  time: number;
-  duration: number;
+  time: number; // absolute start time in seconds
+  duration: number; // duration in seconds
+  timeOffset: number; // offset from start of measure in seconds
   velocity: number;
+  channel?: number;
+  stringIndex?: number; // 0..5 (exact string)
+  fret?: number; // 0..15 (exact fret)
+  noteId?: string; // e.g. "str-fret"
 }
 
-export interface MidiStep {
-  index: number; // 0-based
+export interface ModalSection {
+  startMeasure: number; // 1-based
+  endMeasure: number;
+  root: number;
+  mode: BlackMetalModeInfo;
+  transitionReason?: string;
+}
+
+export interface GlobalMidiSongAnalysis {
+  mainMode: BlackMetalModeInfo;
+  mainRoot: number;
+  totalMeasures: number;
+  timeSignature: string; // e.g. "4/4"
+  bpm: number;
+  modalSections: ModalSection[];
+}
+
+export interface MidiMeasure {
+  measureNumber: number; // 1-based (Compás 1, 2, ...)
   timeStart: number;
   timeEnd: number;
+  duration: number;
   notes: MidiNoteEvent[];
-  pitchClasses: number[]; // unique pitch classes (0..11)
+  pitchClasses: number[];
   exactMidiNumbers: number[];
-  detectedRoot: number; // 0..11
+  // Exact execution positions on the fretboard (Guitar Pro channel or ergonomic)
+  exactTargetIds: string[]; // string of `${stringIndex}-${fret}`
+  detectedRoot: number;
   detectedScale: BlackMetalModeInfo;
   chordName: string;
   intervalDegrees: IntervalDegree[];
-  progressionMovement?: string; // e.g. "Salto de tercera menor descendente..."
+  transitionAlert?: string; // Notice if modal or tonal change occurs relative to previous measure
+  progressionMovement?: string;
 }
 
 export interface MidiTrackInfo {

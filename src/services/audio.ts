@@ -23,6 +23,7 @@ class AudioEngine {
 
   private currentSequence: Tone.Sequence | null = null;
   private isArpeggiating = false;
+  private isPlayingMeasure = false;
   private onHighlightChange: HighlightCallback | null = null;
 
   private constructor() {}
@@ -119,6 +120,54 @@ class AudioEngine {
     });
   }
 
+  /**
+   * Plays a complete measure with its exact timing and rhythmic offsets,
+   * scheduling synchronized neon-green real-time illumination.
+   */
+  public async playMeasureRhythm(
+    notes: { midi: number; timeOffset: number; duration: number; noteId?: string }[],
+    onNoteStart: (noteId: string) => void,
+    onNoteEnd: (noteId: string) => void,
+    onFinish: () => void
+  ): Promise<void> {
+    await this.init();
+    if (!this.synth || notes.length === 0) {
+      onFinish();
+      return;
+    }
+
+    this.isPlayingMeasure = true;
+    const startTime = Tone.now() + 0.05;
+    let maxEndTime = startTime;
+
+    notes.forEach((note) => {
+      const noteTime = startTime + Math.max(0, note.timeOffset);
+      const duration = Math.max(0.12, note.duration);
+      const noteEndTime = noteTime + duration;
+      if (noteEndTime > maxEndTime) {
+        maxEndTime = noteEndTime;
+      }
+
+      const noteName = Tone.Frequency(note.midi, 'midi').toNote();
+      this.synth!.triggerAttackRelease(noteName, duration, noteTime);
+
+      if (note.noteId) {
+        Tone.Draw.schedule(() => {
+          onNoteStart(note.noteId!);
+        }, noteTime);
+
+        Tone.Draw.schedule(() => {
+          onNoteEnd(note.noteId!);
+        }, noteEndTime);
+      }
+    });
+
+    Tone.Draw.schedule(() => {
+      this.isPlayingMeasure = false;
+      onFinish();
+    }, maxEndTime + 0.05);
+  }
+
   public setBpm(bpm: number): void {
     Tone.Transport.bpm.value = Math.max(60, Math.min(180, bpm));
   }
@@ -211,6 +260,10 @@ class AudioEngine {
 
   public getIsArpeggiating(): boolean {
     return this.isArpeggiating;
+  }
+
+  public getIsPlayingMeasure(): boolean {
+    return this.isPlayingMeasure;
   }
 }
 

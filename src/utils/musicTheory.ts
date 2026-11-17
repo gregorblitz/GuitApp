@@ -25,6 +25,8 @@ export const CHROMATIC_NOTES: NoteName[] = [
 ];
 
 // Flat representation dictionary for clean display
+export const STANDARD_TUNING_MIDI = [64, 59, 55, 50, 45, 40] as const;
+
 export const ENHARMONIC_FLATS: Record<number, string> = {
   0: 'C',
   1: 'Db',
@@ -259,14 +261,14 @@ export const EXPLORER_PRESETS: ExplorerPreset[] = [
 ];
 
 export const INITIAL_PALETTE_COLORS = [
-  '#ff4fa2',
-  '#64c8ff',
-  '#ccb534',
-  '#ffffff',
-  '#ffffff',
-  '#ffffff',
-  '#ffffff',
-  '#ffffff',
+  '#ff4fa2', // Slot 1: Tónica / R
+  '#64c8ff', // Slot 2: 5ta Justa
+  '#ccb534', // Slot 3: 3ra Mayor / Menor
+  '#FF6D00', // Slot 4: Naranja intenso
+  '#AA00FF', // Slot 5: Violeta eléctrico
+  '#FFD600', // Slot 6: Amarillo puro
+  '#2979FF', // Slot 7: Azul cobalto
+  '#1DE9B6', // Slot 8: Turquesa / Menta
 ];
 
 export function mapActiveIntervalsToColors(
