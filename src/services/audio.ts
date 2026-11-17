@@ -108,6 +108,17 @@ class AudioEngine {
     });
   }
 
+  public async playMidiStep(midiNumbers: number[], duration = '2n'): Promise<void> {
+    await this.init();
+    if (!this.synth || midiNumbers.length === 0) return;
+
+    const notes = midiNumbers.map((m) => Tone.Frequency(m, 'midi').toNote());
+    const now = Tone.now() + 0.01;
+    notes.forEach((note, index) => {
+      this.synth!.triggerAttackRelease(note, duration, now + index * 0.012);
+    });
+  }
+
   public setBpm(bpm: number): void {
     Tone.Transport.bpm.value = Math.max(60, Math.min(180, bpm));
   }

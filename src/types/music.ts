@@ -90,3 +90,45 @@ export interface ExplorerPreset {
   degrees: IntervalDegree[];
   description: string;
 }
+
+// --- FASE 5: ANALIZADOR MIDI BLACK METAL ---
+export interface BlackMetalModeInfo {
+  id: string;
+  name: string;
+  shortName: string;
+  semitones: number[];
+  degrees: IntervalDegree[];
+  styleDescription: string;
+  bandReferences: string;
+}
+
+export interface MidiNoteEvent {
+  midi: number;
+  pitchClass: number; // 0..11
+  name: string; // e.g. "E3"
+  time: number;
+  duration: number;
+  velocity: number;
+}
+
+export interface MidiStep {
+  index: number; // 0-based
+  timeStart: number;
+  timeEnd: number;
+  notes: MidiNoteEvent[];
+  pitchClasses: number[]; // unique pitch classes (0..11)
+  exactMidiNumbers: number[];
+  detectedRoot: number; // 0..11
+  detectedScale: BlackMetalModeInfo;
+  chordName: string;
+  intervalDegrees: IntervalDegree[];
+  progressionMovement?: string; // e.g. "Salto de tercera menor descendente..."
+}
+
+export interface MidiTrackInfo {
+  index: number;
+  name: string;
+  notesCount: number;
+  channel: number;
+  isGuitar: boolean;
+}

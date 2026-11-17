@@ -6,8 +6,11 @@ import { StringMatrix } from './components/StringMatrix';
 import { PlaybackControls } from './components/PlaybackControls';
 import { Fretboard } from './components/Fretboard';
 import { ChordPresets } from './components/ChordPresets';
+import { MidiAnalyzer } from './components/MidiAnalyzer';
 import type {
   IntervalDegree,
+  MidiStep,
+  MidiTrackInfo,
   StringConfig,
   TuningId,
 } from './types/music';
@@ -22,6 +25,7 @@ import {
   findVoicingNotes,
   calculateInterval,
 } from './utils/musicTheory';
+import { getDemoBlackMetalSteps, parseMidiToSteps } from './utils/blackMetalAnalysis';
 import { audioEngine, type ArpNoteItem } from './services/audio';
 
 export function App() {
@@ -54,6 +58,17 @@ export function App() {
   const [isArpeggiating, setIsArpeggiating] = useState<boolean>(false);
   const [highlightedNoteId, setHighlightedNoteId] = useState<string | null>(null);
 
+  // 8. Fase 5: Analizador MIDI Black Metal state
+  const [isMidiModeActive, setIsMidiModeActive] = useState<boolean>(false);
+  const [midiSteps, setMidiSteps] = useState<MidiStep[]>([]);
+  const [currentMidiStepIndex, setCurrentMidiStepIndex] = useState<number>(0);
+  const [midiTracks, setMidiTracks] = useState<MidiTrackInfo[]>([]);
+  const [selectedMidiTrackIndex, setSelectedMidiTrackIndex] = useState<number>(0);
+  const [savedUserChord, setSavedUserChord] = useState<{ root: number; intervals: IntervalDegree[] } | null>(null);
+
+  // Ref to global hidden file input for header "Subir MIDI" button
+  const headerFileInputRef = useRef<HTMLInputElement | null>(null);
+
   // Avoid auto-strum on initial mount before user gesture
   const isFirstMount = useRef(true);
 
@@ -76,6 +91,12 @@ export function App() {
   const slotAssignments = useMemo(() => {
     return getSlotAssignments(activeIntervals);
   }, [activeIntervals]);
+
+  // Current active MIDI step
+  const activeMidiStep = useMemo<MidiStep | null>(() => {
+    if (!isMidiModeActive || midiSteps.length === 0) return null;
+    return midiSteps[currentMidiStepIndex] || null;
+  }, [isMidiModeActive, midiSteps, currentMidiStepIndex]);
 
   // Collect all visible notes on the fretboard for the arpeggiator
   const visibleFretboardNotes = useMemo<ArpNoteItem[]>(() => {
@@ -136,17 +157,26 @@ export function App() {
     [activateAudio]
   );
 
-  // Auto-strum when Root note, intervals, or tuning changes (after initial mount)
+  // Play specific MIDI step
+  const handlePlayMidiStep = useCallback(
+    async (step: MidiStep) => {
+      await activateAudio();
+      audioEngine.playMidiStep(step.exactMidiNumbers, '2n');
+    },
+    [activateAudio]
+  );
+
+  // Auto-strum when Root note, intervals, or tuning changes in normal mode
   useEffect(() => {
     if (isFirstMount.current) {
       isFirstMount.current = false;
       return;
     }
 
-    if (voicingNotes.length > 0) {
+    if (!isMidiModeActive && voicingNotes.length > 0) {
       audioEngine.playStrum(voicingNotes, 0.035);
     }
-  }, [rootIndex, activeIntervals, selectedTuning, voicingNotes]);
+  }, [rootIndex, activeIntervals, selectedTuning, voicingNotes, isMidiModeActive]);
 
   // Sync BPM with Tone.Transport
   useEffect(() => {
@@ -205,6 +235,97 @@ export function App() {
     }
   }, [visibleFretboardNotes, isArpeggiating, bpm]);
 
+  // --- MIDI ANALYZER LOGIC (Fase 5) ---
+  const handleLoadMidiData = useCallback(
+    (steps: MidiStep[], tracks: MidiTrackInfo[], selectedTrack: number) => {
+      if (!isMidiModeActive) {
+        setSavedUserChord({ root: rootIndex, intervals: activeIntervals });
+      }
+
+      setMidiSteps(steps);
+      setMidiTracks(tracks);
+      setSelectedMidiTrackIndex(selectedTrack);
+      setCurrentMidiStepIndex(0);
+      setIsMidiModeActive(true);
+
+      // Apply first step root and scale
+      if (steps.length > 0) {
+        const first = steps[0];
+        setRootIndex(first.detectedRoot);
+        setActiveIntervals(first.detectedScale.degrees);
+        handlePlayMidiStep(first);
+      }
+    },
+    [isMidiModeActive, rootIndex, activeIntervals, handlePlayMidiStep]
+  );
+
+  const handleMidiStepChange = useCallback(
+    (newIndex: number) => {
+      setCurrentMidiStepIndex(newIndex);
+      const step = midiSteps[newIndex];
+      if (step) {
+        // Automatically light up detected root and mode
+        setRootIndex(step.detectedRoot);
+        setActiveIntervals(step.detectedScale.degrees);
+      }
+    },
+    [midiSteps]
+  );
+
+  const handleExitMidiMode = useCallback(() => {
+    setIsMidiModeActive(false);
+    if (savedUserChord) {
+      setRootIndex(savedUserChord.root);
+      setActiveIntervals(savedUserChord.intervals);
+    }
+  }, [savedUserChord]);
+
+  const handleToggleMidiMode = useCallback(() => {
+    if (isMidiModeActive) {
+      handleExitMidiMode();
+    } else {
+      if (midiSteps.length === 0) {
+        // Load demo riff by default
+        const demo = getDemoBlackMetalSteps();
+        handleLoadMidiData(
+          demo,
+          [{ index: 0, name: 'Demo: Black Metal Riff (Emperor/Mayhem Style)', notesCount: 18, channel: 1, isGuitar: true }],
+          0
+        );
+      } else {
+        setIsMidiModeActive(true);
+        const step = midiSteps[currentMidiStepIndex];
+        if (step) {
+          setRootIndex(step.detectedRoot);
+          setActiveIntervals(step.detectedScale.degrees);
+        }
+      }
+    }
+  }, [isMidiModeActive, midiSteps, currentMidiStepIndex, handleExitMidiMode, handleLoadMidiData]);
+
+  // Header "Subir MIDI" button click handler
+  const handleHeaderUploadMidiClick = () => {
+    headerFileInputRef.current?.click();
+  };
+
+  const handleHeaderFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const parsed = parseMidiToSteps(buffer);
+      if (parsed.steps.length > 0) {
+        handleLoadMidiData(parsed.steps, parsed.tracks, parsed.selectedTrack);
+      } else {
+        alert('No se encontraron notas en la pista seleccionada del archivo MIDI.');
+      }
+    } catch (err) {
+      console.error('Error al procesar archivo MIDI:', err);
+      alert('Error al leer el archivo MIDI. Verifica que sea un archivo .mid válido.');
+    }
+  };
+
   // --- HANDLERS FOR CONTROLS ---
   const handleSelectRoot = (index: number) => {
     setRootIndex(index);
@@ -255,7 +376,16 @@ export function App() {
   return (
     <div className="min-h-screen bg-[#242426] text-gray-100 flex flex-col p-3 md:p-6 font-sans">
       <div className="max-w-[1550px] w-full mx-auto flex flex-col gap-4">
-        {/* Header with Title, Chord, Tuning Selector & Audio Ready */}
+        {/* Hidden global file input for Header "Subir MIDI" button */}
+        <input
+          ref={headerFileInputRef}
+          type="file"
+          accept=".mid,.midi"
+          onChange={handleHeaderFileInputChange}
+          className="hidden"
+        />
+
+        {/* Header with Title, Chord, Tuning Selector, MIDI Button & Audio Ready */}
         <Header
           rootIndex={rootIndex}
           activeIntervals={activeIntervals}
@@ -263,16 +393,37 @@ export function App() {
           onChangeTuning={handleChangeTuning}
           isAudioReady={isAudioReady}
           onActivateAudio={activateAudio}
+          isMidiModeActive={isMidiModeActive}
+          onToggleMidiMode={handleToggleMidiMode}
+          onUploadMidiClick={handleHeaderUploadMidiClick}
         />
 
+        {/* Fase 5: Analizador MIDI de Black Metal (Paso a Paso) */}
+        {isMidiModeActive && (
+          <MidiAnalyzer
+            steps={midiSteps}
+            currentStepIndex={currentMidiStepIndex}
+            tracks={midiTracks}
+            selectedTrackIndex={selectedMidiTrackIndex}
+            onSelectTrack={(trackIdx) => setSelectedMidiTrackIndex(trackIdx)}
+            onStepChange={handleMidiStepChange}
+            onPlayStep={handlePlayMidiStep}
+            onLoadMidiData={handleLoadMidiData}
+            onExitMidiMode={handleExitMidiMode}
+            intervalColors={intervalColors}
+          />
+        )}
+
         {/* Quick Chord Presets & Guided Explorer (Fase 4) */}
-        <ChordPresets
-          onSelectPreset={handleSelectPreset}
-          activeIntervals={activeIntervals}
-          onClearAll={handleClearAll}
-          intervalColors={intervalColors}
-          rootNoteName={CHROMATIC_NOTES[rootIndex]}
-        />
+        {!isMidiModeActive && (
+          <ChordPresets
+            onSelectPreset={handleSelectPreset}
+            activeIntervals={activeIntervals}
+            onClearAll={handleClearAll}
+            intervalColors={intervalColors}
+            rootNoteName={CHROMATIC_NOTES[rootIndex]}
+          />
+        )}
 
         {/* 1. PANEL SUPERIOR (Grid de 2 columnas) */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -282,7 +433,7 @@ export function App() {
             <PianoKeyboard
               mode="root"
               title="1. Selector de Nota Raíz"
-              subtitle="Exclusivo (Ilumina #fff8e7)"
+              subtitle={isMidiModeActive ? 'Raíz Detectada en Riff' : 'Exclusivo (Ilumina #fff8e7)'}
               selectedRootIndex={rootIndex}
               onSelectRoot={handleSelectRoot}
             />
@@ -291,7 +442,7 @@ export function App() {
             <PianoKeyboard
               mode="interval"
               title="2. Selector de Intervalos"
-              subtitle="Selección Múltiple (Paleta de Colores)"
+              subtitle={isMidiModeActive ? 'Modo Black Metal Sugerido' : 'Selección Múltiple (Paleta de Colores)'}
               activeIntervals={activeIntervals}
               onToggleInterval={handleToggleInterval}
               intervalColors={intervalColors}
@@ -339,6 +490,8 @@ export function App() {
             highlightedNoteId={highlightedNoteId}
             tuningBadgeText={TUNING_CONFIGS[selectedTuning].badgeText}
             useFlats={isFlatTuning}
+            activeRiffMidiNumbers={activeMidiStep ? activeMidiStep.exactMidiNumbers : []}
+            activeRiffPitchClasses={activeMidiStep ? activeMidiStep.pitchClasses : []}
             onNoteClick={handleFretboardNoteClick}
           />
         </div>
@@ -351,7 +504,7 @@ export function App() {
             {TUNING_CONFIGS[selectedTuning].label}: {TUNING_CONFIGS[selectedTuning].subtitle}
           </span>
           <span>•</span>
-          <span>Síntesis Tone.PolySynth con filtro 2600Hz, chorus & reverb</span>
+          <span>Analizador de Riffs Black Metal & Síntesis Tone.PolySynth</span>
         </footer>
       </div>
     </div>

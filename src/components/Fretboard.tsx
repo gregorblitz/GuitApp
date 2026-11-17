@@ -11,6 +11,8 @@ interface FretboardProps {
   highlightedNoteId: string | null;
   tuningBadgeText?: string;
   useFlats?: boolean;
+  activeRiffMidiNumbers?: number[]; // Exact MIDI pitches sounding in current riff step (Fase 5)
+  activeRiffPitchClasses?: number[]; // Pitch classes sounding in current riff step (Fase 5)
   onNoteClick: (note: {
     id: string;
     octaveNote: string;
@@ -34,6 +36,8 @@ export const Fretboard: React.FC<FretboardProps> = ({
   highlightedNoteId,
   tuningBadgeText = 'Afinación: E Estándar (EADGBE)',
   useFlats = false,
+  activeRiffMidiNumbers = [],
+  activeRiffPitchClasses = [],
   onNoteClick,
 }) => {
   const [clickedNoteId, setClickedNoteId] = useState<string | null>(null);
@@ -45,6 +49,8 @@ export const Fretboard: React.FC<FretboardProps> = ({
   const visibleStrings = strings.filter((s) => s.stringVisible);
 
   const activeIntervalsSet = new Set(activeIntervals);
+  const riffMidiSet = new Set(activeRiffMidiNumbers);
+  const riffPitchClassSet = new Set(activeRiffPitchClasses);
 
   const handleNoteClick = (
     id: string,
@@ -75,11 +81,17 @@ export const Fretboard: React.FC<FretboardProps> = ({
           </span>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-gray-400">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
           <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[#18181b] border-2 border-[#ff4fa2]"></span>
-            <span>Nodo de Grado</span>
+            <span>Escala / Grado</span>
           </div>
+          {activeRiffMidiNumbers.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded-full border-2 border-amber-300 ring-2 ring-white/90 shadow-[0_0_8px_gold] animate-pulse"></span>
+              <span className="text-amber-300 font-bold">Nota Riff (Halo Dorado)</span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-1 bg-[#e0d2b4] rounded"></span>
             <span>Cuerda (#e0d2b4)</span>
@@ -156,13 +168,20 @@ export const Fretboard: React.FC<FretboardProps> = ({
                         useFlats
                       );
 
+                      const noteMidi = str.openMidi + fret;
+                      const pitchClass = noteMidi % 12;
+
                       const isIntervalActive = activeIntervalsSet.has(degree);
-                      const shouldRenderNote = isIntervalActive && str.notesEnabled;
+                      const isRiffExact = riffMidiSet.has(noteMidi);
+                      const isRiffPitchClass = riffPitchClassSet.has(pitchClass);
+                      const isRiffActive = isRiffExact || isRiffPitchClass;
+
+                      // Render note if interval is active OR if it is actively played in the MIDI riff
+                      const shouldRenderNote = (isIntervalActive || isRiffActive) && str.notesEnabled;
                       const noteColor = intervalColors[degree] || '#ffffff';
                       const noteId = `${str.index}-${fret}`;
                       const isHighlighted = highlightedNoteId === noteId;
                       const isClicked = clickedNoteId === noteId;
-                      const noteMidi = str.openMidi + fret;
 
                       return (
                         <div
@@ -182,50 +201,77 @@ export const Fretboard: React.FC<FretboardProps> = ({
                             className="absolute left-0 right-0 pointer-events-none z-0"
                           />
 
-                          {/* Note Node Circle */}
+                          {/* Note Node Circle with Double Ring / Halo for Riff notes */}
                           {shouldRenderNote && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleNoteClick(
-                                  noteId,
-                                  octaveNote,
-                                  degree,
-                                  str.stringNumber,
-                                  fret,
-                                  noteMidi
-                                )
-                              }
-                              style={{
-                                borderColor: noteColor,
-                                backgroundColor: isHighlighted ? noteColor : '#18181b',
-                                color: isHighlighted ? '#18181b' : '#f3f4f6',
-                                boxShadow: isHighlighted
-                                  ? `0 0 20px 4px ${noteColor}, inset 0 0 8px #ffffff`
-                                  : isClicked
-                                  ? `0 0 16px 3px ${noteColor}`
-                                  : `0 0 8px ${noteColor}66`,
-                                transform:
-                                  isHighlighted || isClicked
-                                    ? 'scale(1.18)'
-                                    : 'scale(1)',
-                              }}
-                              className="relative z-20 w-8 h-8 rounded-full border-[2.5px] flex flex-col items-center justify-center cursor-pointer transition-all duration-150 group active:scale-90 hover:scale-110 hover:z-30"
-                              title={`${degree} • ${octaveNote} (Cuerda ${str.stringNumber}, Traste ${fret})`}
-                            >
-                              <span
-                                className={`text-[11px] font-black leading-none drop-shadow-sm ${
-                                  isHighlighted ? 'text-black font-extrabold' : ''
+                            <div className="relative flex items-center justify-center">
+                              {/* 4. Halo / Anillo Exterior Dorado Brillante (Fase 5) */}
+                              {isRiffActive && (
+                                <div
+                                  style={{
+                                    boxShadow: isRiffExact
+                                      ? '0 0 24px 6px rgba(251, 191, 36, 0.95), 0 0 10px 2px #ffffff'
+                                      : '0 0 14px 3px rgba(251, 191, 36, 0.65)',
+                                  }}
+                                  className={`absolute -inset-1.5 rounded-full border-2 border-amber-300 ring-2 ring-white/90 pointer-events-none z-30 transition-all ${
+                                    isRiffExact ? 'animate-pulse scale-105' : 'opacity-85'
+                                  }`}
+                                />
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleNoteClick(
+                                    noteId,
+                                    octaveNote,
+                                    degree,
+                                    str.stringNumber,
+                                    fret,
+                                    noteMidi
+                                  )
+                                }
+                                style={{
+                                  borderColor: isRiffActive && !isIntervalActive ? '#fbbf24' : noteColor,
+                                  backgroundColor: isHighlighted ? noteColor : '#18181b',
+                                  color: isHighlighted ? '#18181b' : '#f3f4f6',
+                                  boxShadow: isHighlighted
+                                    ? `0 0 20px 4px ${noteColor}, inset 0 0 8px #ffffff`
+                                    : isClicked
+                                    ? `0 0 16px 3px ${noteColor}`
+                                    : isRiffActive
+                                    ? `0 0 10px rgba(251, 191, 36, 0.8)`
+                                    : `0 0 8px ${noteColor}66`,
+                                  transform:
+                                    isHighlighted || isClicked
+                                      ? 'scale(1.18)'
+                                      : 'scale(1)',
+                                }}
+                                className={`relative z-20 w-8 h-8 rounded-full border-[2.5px] flex flex-col items-center justify-center cursor-pointer transition-all duration-150 group active:scale-90 hover:scale-110 hover:z-40`}
+                                title={`${degree} • ${octaveNote} (Cuerda ${str.stringNumber}, Traste ${fret}) ${
+                                  isRiffExact ? '★ NOTA DEL RIFF ACTIVO' : ''
                                 }`}
                               >
-                                {degree}
-                              </span>
+                                <span
+                                  className={`text-[11px] font-black leading-none drop-shadow-sm ${
+                                    isHighlighted ? 'text-black font-extrabold' : ''
+                                  }`}
+                                >
+                                  {isIntervalActive ? degree : octaveNote}
+                                </span>
 
-                              {/* Hover mini-badge showing exact note */}
-                              <span className="absolute -top-6 bg-black/90 text-[9px] text-amber-200 px-1 py-0.2 rounded font-mono border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap shadow-md z-40">
-                                {octaveNote}
-                              </span>
-                            </button>
+                                {/* Mini badge for exact riff note */}
+                                {isRiffExact && (
+                                  <span className="absolute -bottom-1 -right-1 bg-amber-400 text-black text-[7px] font-black px-1 rounded-full uppercase leading-tight shadow-md z-40 border border-white pointer-events-none">
+                                    RIFF
+                                  </span>
+                                )}
+
+                                {/* Hover mini-badge showing exact note */}
+                                <span className="absolute -top-6 bg-black/95 text-[9px] text-amber-200 px-1.5 py-0.2 rounded font-mono border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap shadow-md z-50">
+                                  {octaveNote} {isRiffExact ? '• Riff' : ''}
+                                </span>
+                              </button>
+                            </div>
                           )}
                         </div>
                       );
